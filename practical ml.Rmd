@@ -1,0 +1,244 @@
+---
+title: "Practical Machine Learning course project"
+date: "Saturday, May 23, 2015"
+output: html_document
+---
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+# Data 
+
+The training data for this project are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+# Synopsis
+
+### Reproduceability
+
+For reproducability issues, we set a random seed 12345. In order to reproduce the results, the same seed should be used. In this project the code checks the availability, installs and and loads all the necessary R libraries. Thus it can be used directly without any user input.
+
+### Building the model
+
+The variable is classe, a factor variable with 5 levels. For this data set, “participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in 5 different fashions:
+
+Fashion | Class Label
+------------- | -------------
+exactly according to the specification | A
+throwing the elbows to the front | B
+lifting the dumbbell only halfway | C
+lowering the dumbbell only halfway | D
+throwing the hips to the front | E
+
+Two models will be tested: Decision trees and Random Forest algorithms. The model with the highest accuracy will be chosen as the final model.
+
+### Cross-validation
+
+Cross-validation will be performed by subsampling our training data set randomly without replacement into 2 subsamples: cvTraining data (60% of the original Training data set) and cvTesting data (40%). The models will be fitted on the cvTraining data set, and tested on the cvTesting data. Once the most accurate model is choosen, it will be tested on the original Testing data set.
+
+### Expected out-of-sample error
+
+The expected out-of-sample error will correspond to the quantity: 1-accuracy in the cross-validation data. Accuracy is the proportion of correct classified observation over the total sample in the subTesting data set. Expected accuracy is the expected accuracy in the out-of-sample data set (i.e. original testing data set). Thus, the expected value of the out-of-sample error will correspond to the expected number of missclassified observations/total observations in the Test data set, which is the quantity: 1-accuracy found from the cross-validation data set.
+
+### Reasons for choices
+
+The outcome variable “classe” is an unordered factor variable. So, a classification algorithm should be used. We have a large sample size with N= 19622 in the Training data set. This allow us to divide our Training sample into cvTraining and cvTesting to allow cross-validation. Features with all missing values will be discarded as well as features that are irrelevant. All other features will be kept as relevant variables.
+Decision tree and random forest algorithms are known for their ability of detecting the features that are important for classification. Feature selection is inherent, so it is not so necessary at the data preparation phase. Thus, there will not be any feature selection section in this project.
+
+# Load required packages
+
+```{r, message=FALSE, echo=TRUE}
+# installing/loading the package:
+if(!require(ggplot2)) {
+  install.packages("ggplot2"); require(ggplot2)} #load / install+load ggplot2
+
+# installing/loading the package:
+if(!require(caret)) {
+  install.packages("caret"); require(caret)} #load / install+load caret
+
+# installing/loading the package:
+if(!require(rpart)) {
+  install.packages("rpart"); require(rpart)} #load / install+load rpart
+
+# installing/loading the package:
+if(!require(rpart.plot)) {
+  install.packages("rpart.plot"); require(rpart.plot)} #load / install+load rpart.plot
+
+# installing/loading the package:
+if(!require(rattle)) {
+  install.packages("rattle"); require(rattle)} #load / install+load rattle
+
+# installing/loading the package:
+if(!require(randomForest)) {
+  install.packages("randomForest"); require(randomForest)} #load / install+load randomForest
+
+# Make nicer background theme in ggplot
+science_theme <- theme(panel.grid.major = element_line(size = 0.5, color = "grey"),
+                       panel.background = element_rect(fill="antiquewhite1"), 
+                       axis.line = element_line(size = 0.7, color = "black"), 
+                       text = element_text(size = 16),
+                       axis.text.x = element_text(angle = 0, hjust = 1))
+```
+
+# Data loading and cleaning
+
+The data are read and loaded directly from internet without need to download them in local file. "#DIV/0!","" values are immediately converted to NA R values. This means that before constructing the code, we already had a knowledge about the data. For reproducability issues, we set a random seed.
+
+```{r}
+#URL for the training data set
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+#URL for the testing data set
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# Load the data without saving in the local driver
+training <- read.csv(url(trainUrl), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testUrl), na.strings=c("NA","#DIV/0!",""))
+
+set.seed(12345)
+```
+
+Then, we delete the columns that contain missing values.
+
+```{r}
+# Delete columns with all missing values
+trainingset<-training[,colSums(is.na(training)) == 0]
+testingset <-testing[,colSums(is.na(testing)) == 0]
+```
+
+We also delete columns irrelevant for the current analysis (columns 1 to 7 in both training and testing data set).
+
+```{r}
+# Delete columns with all missing values
+trainingset <-trainingset[,-c(1:7)]
+testingset <-testingset[,-c(1:7)]
+```
+
+Then we test whether we have variables that present near to zero variability.
+
+```{r}
+nsv <- nearZeroVar(trainingset, saveMetrics=TRUE)
+nsv
+```
+
+As we can see, all values are false. Thus, we will keep all these variables in the analysis.
+
+Finally, we check whether the columns in the training and testing data match.
+
+```{r}
+#check if we have the same column names in the two data sets
+all.equal(colnames(trainingset[,1:(ncol(trainingset) - 1)]), colnames(testingset[,1:(ncol(testingset) - 1)]))
+```
+
+# Create cross-validation data sets
+
+We are dividing the data set to 60% training and 40% testing sets for cross-validation purposes.
+
+```{r}
+cvdata <- createDataPartition(y=trainingset$classe, p=0.6, list=FALSE)
+cvTraining <- trainingset[cvdata, ]
+cvTesting <- trainingset[-cvdata, ]
+```
+
+The training data set for cross validation has dimensions `r dim(cvTraining)`, and the testing data set for cross validation has dimensions `r dim(cvTesting)`. Hence, we have `r dim(cvTraining)[2] - 1` predictors.
+
+Now, we have a clean data set where we can apply our machine learning algorithms.
+
+# Data exploration
+
+Let us first have a visual sense of the data. The following plot presents the frequency of each class.
+
+```{r}
+barplot_traning <- ggplot(trainingset, aes(x=classe)) + 
+  geom_bar(color = "darkorchid1", fill = "dodgerblue1") + 
+  labs(title = "Bar plot of classe variable of the training data set") +
+  science_theme 
+barplot_traning
+```
+
+Now, let us see if the partitioning resulted in the same pattern.
+
+```{r}
+barplot_traning_cv <- ggplot(cvTraining, aes(x=classe)) + 
+  geom_bar(color = "darkorchid1", fill = "dodgerblue1") + 
+  labs(title = "Bar plot of classe variable of the cv training data set") +
+  science_theme 
+barplot_traning_cv
+
+barplot_testing_cv <- ggplot(cvTesting, aes(x=classe)) + 
+  geom_bar(color = "dodgerblue1", fill = "darkorchid1") + 
+  labs(title = "Bar plot of classe variable of the cv testing data set") +
+  science_theme 
+barplot_testing_cv
+```
+
+As we can see, the pattern remained the same in the two data sets (as it is in the original training data set). So we can expect that an algorithm that performs well in the cv training data set will perform the same in the cv testing data set.
+
+Now, we have a clean data set where we can apply our machine learning algorithms.
+
+# Decision trees classification
+
+First, let us use the Decision trees classification algorithm using the rpart function. We will train our model using the 60% of the training data set (cvTraining).
+
+```{r}
+dectree <- rpart(classe ~ ., data=cvTraining, method="class")
+
+#Plot of the decision tree
+rpart.plot(dectree, main="Decision tree classification", extra=102, under=TRUE, faclen=0)
+```
+
+Now, let us use the rest 40% of the data set for prediction (cvTesting).
+
+```{r}
+pred_dectree <- predict(dectree, cvTesting, type = "class")
+
+#Confusion matrix
+confusionMatrix(pred_dectree, cvTesting$classe)
+```
+
+As we can see from the results of the confusion matrix, we have an accuracy of 0.7267 with 95% CI (0.7167, 0.7366). We can infer that simple decision trees are not the best choice for our data set since we do not have a good accuracy. We will now test Random Forest classification to check if the accuracy will increase.
+
+# Random Forest classification
+
+```{r}
+rf <- randomForest(classe ~. , data=cvTraining)
+
+pred_rf <- predict(rf, cvTesting, type = "class")
+
+confusionMatrix(pred_rf, cvTesting$classe)
+```
+
+As expected, classification using Random Forests outperformed Decision trees with an accuracy of 0.9943 with 95% CI (0.9923, 0.9958). Thus, we decide to use Random Forests as the best model to create the submission files.
+
+### Out-of-sample error
+
+The expected out-of-sample error is calculated as 1 - accuracy for predictions made against the cross-validation set. In this case, the out-of-sample error is `r 1 - 0.9943` or `r (1 - 0.9943)*100`%. Hence, we expect almost none (if not completely none) misclassifications.
+
+# Create the submission files
+
+Finally, as we decided to use Random Forests for the submission data sets, let us have a look of the predicted classes of the 20 new subjects.
+
+```{r}
+pred_new <- predict(rf, testingset[,-53], type = "class")
+pred_new
+```
+
+The code to create the submission files is given by:
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+#Run if you want to create the files
+#pml_write_files(pred_new)
+```
